@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Orrery — 3D Solar System</title>
+<style>
+  :root{
+    --bg-panel: rgba(8, 12, 19, 0.78);
+    --line: rgba(140, 185, 255, 0.22);
+    --line-strong: rgba(140, 185, 255, 0.45);
+    --text: #d7e4f5;
+    --text-dim: #7e93ad;
+    --amber: #ffb45e;
+    --cyan: #9ecfff;
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+  }
+  *{ margin:0; padding:0; box-sizing:border-box; }
+  html, body{ width:100%; height:100%; overflow:hidden; background:#02040a; }
+  body{ font-family: var(--mono); color: var(--text); -webkit-font-smoothing: antialiased; }
+  #scene{ position:fixed; inset:0; width:100%; height:100%; display:block; cursor:grab; }
+  #scene.dragging{ cursor:grabbing; }
+
+  .panel{
+    position:fixed; background:var(--bg-panel); border:1px solid var(--line);
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+    border-radius:4px; z-index:10;
+  }
+
+  /* ---- top-left: title + mission clock ---- */
+  #hud-top{ top:16px; left:16px; padding:12px 16px; min-width:218px; }
+  #hud-top h1{
+    font-size:12px; font-weight:600; letter-spacing:0.32em; color:var(--text);
+    text-transform:uppercase;
+  }
+  #hud-top h1 span{ color:var(--text-dim); }
+  #clock{
+    margin-top:8px; font-size:20px; color:var(--amber); letter-spacing:0.06em;
+    font-variant-numeric: tabular-nums;
+  }
+  #clock-sub{ margin-top:2px; font-size:10px; color:var(--text-dim); letter-spacing:0.12em; text-transform:uppercase; }
+
+  /* ---- top-right: view toggles ---- */
+  #hud-view{ top:16px; right:16px; padding:8px; display:flex; gap:6px; }
+  button{
+    font-family:var(--mono); font-size:10px; letter-spacing:0.14em; text-transform:uppercase;
+    background:transparent; color:var(--text-dim); border:1px solid var(--line);
+    border-radius:3px; padding:7px 10px; cursor:pointer; transition: color .15s, border-color .15s, background .15s;
+  }
+  button:hover{ color:var(--text); border-color:var(--line-strong); }
+  button:focus-visible{ outline:2px solid var(--cyan); outline-offset:2px; }
+  button.on{ color:var(--cyan); border-color:var(--line-strong); background:rgba(140,185,255,0.08); }
+
+  /* ---- bottom-left: time controls ---- */
+  #hud-time{ bottom:16px; left:16px; padding:12px 16px; display:flex; align-items:center; gap:14px; }
+  #btn-pause{ width:76px; }
+  #speed{ -webkit-appearance:none; appearance:none; width:150px; height:2px; background:var(--line-strong); border-radius:1px; cursor:pointer; }
+  #speed::-webkit-slider-thumb{
+    -webkit-appearance:none; appearance:none; width:13px; height:13px; border-radius:50%;
+    background:var(--amber); border:none; cursor:pointer;
+  }
+  #speed::-moz-range-thumb{ width:13px; height:13px; border-radius:50%; background:var(--amber); border:none; cursor:pointer; }
+  #speed:focus-visible{ outline:2px solid var(--cyan); outline-offset:4px; }
+  #speed-out{ font-size:10px; color:var(--text-dim); letter-spacing:0.08em; min-width:104px; font-variant-numeric:tabular-nums; }
+
+  /* ---- bottom-center: planet strip ---- */
+  #hud-nav{
+    bottom:16px; left:50%; transform:translateX(-50%);
+    padding:6px; display:flex; gap:4px; max-width:min(92vw, 640px); overflow-x:auto; scrollbar-width:none;
+  }
+  #hud-nav::-webkit-scrollbar{ display:none; }
+  #hud-nav button{ border-color:transparent; padding:7px 9px; white-space:nowrap; }
+  #hud-nav button.on{ border-color:var(--line-strong); }
+
+  /* ---- right: dossier ---- */
+  #dossier{
+    top:50%; right:16px; transform:translateY(-50%);
+    width:262px; padding:16px; display:none;
+  }
+  #dossier.open{ display:block; }
+  #dossier .eyebrow{ font-size:9px; letter-spacing:0.28em; color:var(--text-dim); text-transform:uppercase; }
+  #dossier h2{ font-size:22px; font-weight:600; letter-spacing:0.1em; text-transform:uppercase; margin:4px 0 12px; color:var(--cyan); }
+  #dossier dl{ display:grid; grid-template-columns:auto 1fr; gap:6px 12px; font-size:11px; border-top:1px solid var(--line); padding-top:12px; }
+  #dossier dt{ color:var(--text-dim); letter-spacing:0.06em; }
+  #dossier dd{ text-align:right; font-variant-numeric:tabular-nums; }
+  #dossier .fact{ margin-top:12px; padding-top:12px; border-top:1px solid var(--line); font-size:11px; line-height:1.55; color:var(--text); }
+  #dossier .fact::before{ content:"◆ "; color:var(--amber); }
+  #btn-release{ margin-top:14px; width:100%; }
+
+  /* ---- hint ---- */
+  #hint{
+    bottom:74px; left:50%; transform:translateX(-50%);
+    font-size:10px; letter-spacing:0.14em; color:var(--text-dim); text-transform:uppercase;
+    background:none; border:none; backdrop-filter:none; -webkit-backdrop-filter:none;
+    transition:opacity 1s; pointer-events:none; text-align:center; padding:0 12px;
+  }
+  #hint.gone{ opacity:0; }
+
+  /* ---- planet labels ---- */
+  .tag{
+    position:fixed; z-index:5; transform:translate(-50%, -130%);
+    font-size:9px; letter-spacing:0.22em; text-transform:uppercase; color:var(--text-dim);
+    cursor:pointer; user-select:none; padding:3px 5px; white-space:nowrap;
+    text-shadow:0 0 6px rgba(0,0,0,0.9);
+  }
+  .tag:hover, .tag.sel{ color:var(--cyan); }
+
+  @media (max-width:700px){
+    #hud-top{ min-width:0; padding:10px 12px; }
+    #clock{ font-size:16px; }
+    #dossier{ top:auto; bottom:128px; right:12px; left:12px; width:auto; transform:none; }
+    #hud-time{ bottom:68px; left:12px; right:12px; justify-content:space-between; }
+    #speed{ width:110px; }
+    #hud-nav{ bottom:12px; max-width:96vw; }
+    #hint{ display:none; }
+  }
+</style>
+</head>
+<body>
+<canvas id="scene" aria-label="Interactive 3D model of the solar system"></canvas>
+
+<div class="panel" id="hud-top">
+  <h1>Orrery <span>/ Solar System</span></h1>
+  <div id="clock">T+ 0Y 000D</div>
+  <div id="clock-sub">Mission elapsed time</div>
+</div>
+
+<div class="panel" id="hud-view">
+  <button id="btn-orbits" class="on" aria-pressed="true">Orbits</button>
+  <button id="btn-labels" class="on" aria-pressed="true">Labels</button>
+  <button id="btn-reset">Reset view</button>
+</div>
+
+<div class="panel" id="hud-time">
+  <button id="btn-pause">Pause</button>
+  <input id="speed" type="range" min="0" max="1000" value="360" aria-label="Simulation speed">
+  <div id="speed-out">≈ 6.1 days / s</div>
+</div>
+
+<div class="panel" id="hud-nav" role="group" aria-label="Fly to a body"></div>
+
+<div class="panel" id="dossier" role="region" aria-live="polite">
+  <div class="eyebrow" id="d-type"></div>
+  <h2 id="d-name"></h2>
+  <dl>
+    <dt>Diameter</dt><dd id="d-diam"></dd>
+    <dt>Day length</dt><dd id="d-day"></dd>
+    <dt>Year length</dt><dd id="d-year"></dd>
+    <dt>Sun distance</dt><dd id="d-dist"></dd>
+  </dl>
+  <div class="fact" id="d-fact"></div>
+  <button id="btn-release">Release camera</button>
+</div>
+
+<div class="panel" id="hint">Drag to orbit · Scroll to zoom · Click a planet to follow it</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function(){
+"use strict";
+
+/* ============================== DATA ============================== */
+var BODIES = [
+  { key:"sun",     name:"Sun",     type:"G-type star",   size:6.0,  dist:0,  period:0,     spin:25,    tilt:0,    color:"#ffb45e",
+    diam:"1,392,700 km", day:"≈ 25 Earth days", year:"—", sdist:"—",
+    fact:"The Sun holds 99.86% of the solar system's mass. About a million Earths could fit inside it." },
+  { key:"mercury", name:"Mercury", type:"Terrestrial planet", size:0.42, dist:14, period:88,  spin:58.6, tilt:0.03, color:"#9c8d7c",
+    diam:"4,879 km", day:"58.6 Earth days", year:"88 days", sdist:"57.9M km",
+    fact:"One solar day on Mercury lasts 176 Earth days — twice as long as its year." },
+  { key:"venus",   name:"Venus",   type:"Terrestrial planet", size:0.95, dist:19, period:225, spin:-243, tilt:177,  color:"#e3c393",
+    diam:"12,104 km", day:"243 Earth days", year:"225 days", sdist:"108.2M km",
+    fact:"Venus spins backwards, so the Sun rises in the west. Surface temperature: about 465 °C — hot enough to melt lead." },
+  { key:"earth",   name:"Earth",   type:"Terrestrial planet", size:1.0,  dist:25, period:365.25, spin:1, tilt:23.4, color:"#4a7fc9",
+    diam:"12,742 km", day:"24 hours", year:"365.25 days", sdist:"149.6M km",
+    fact:"The only place in the universe confirmed to host life — so far." },
+  { key:"mars",    name:"Mars",    type:"Terrestrial planet", size:0.55, dist:32, period:687, spin:1.03, tilt:25.2, color:"#c1623e",
+    diam:"6,779 km", day:"24.6 hours", year:"687 days", sdist:"227.9M km",
+    fact:"Home to Olympus Mons — a volcano nearly three times the height of Everest." },
+  { key:"jupiter", name:"Jupiter", type:"Gas giant",     size:3.9,  dist:47, period:4333, spin:0.41, tilt:3.1,  color:"#c9a47a",
+    diam:"139,820 km", day:"9.9 hours", year:"11.9 years", sdist:"778.5M km",
+    fact:"More than twice the mass of all other planets combined. The Great Red Spot is a storm that has raged for centuries." },
+  { key:"saturn",  name:"Saturn",  type:"Gas giant",     size:3.3,  dist:62, period:10759, spin:0.45, tilt:26.7, color:"#d9c08d",
+    diam:"116,460 km", day:"10.7 hours", year:"29.5 years", sdist:"1.43B km",
+    fact:"Its rings span up to 280,000 km but are often only about ten metres thick — mostly chunks of water ice." },
+  { key:"uranus",  name:"Uranus",  type:"Ice giant",     size:1.9,  dist:75, period:30687, spin:-0.72, tilt:97.8, color:"#9ad2d9",
+    diam:"50,724 km", day:"17.2 hours", year:"84 years", sdist:"2.87B km",
+    fact:"Uranus rolls around the Sun on its side — its axis is tilted almost 98 degrees." },
+  { key:"neptune", name:"Neptune", type:"Ice giant",     size:1.85, dist:86, period:60190, spin:0.67, tilt:28.3, color:"#4a6fd9",
+    diam:"49,244 km", day:"16.1 hours", year:"165 years", sdist:"4.50B km",
+    fact:"Winds on Neptune reach 2,100 km/h — the fastest measured anywhere in the solar system." }
+];
+
+/* ====================== PROCEDURAL TEXTURES ======================= */
+function lerpColor(a, b, t){
+  var ca = new THREE.Color(a), cb = new THREE.Color(b);
+  return "#" + ca.lerp(cb, t).getHexString();
+}
+function bandedTexture(base, opts){
+  opts = opts || {};
+  var w = 256, h = 128;
+  var cv = document.createElement("canvas"); cv.width = w; cv.height = h;
+  var ctx = cv.getContext("2d");
+  ctx.fillStyle = base; ctx.fillRect(0, 0, w, h);
+  var bands = opts.bands || 0;
+  for (var i = 0; i < bands; i++){
+    var y = Math.floor((i + Math.random() * 0.6) * h / bands);
+    var bh = Math.max(2, Math.floor(h / bands * (0.5 + Math.random() * 0.9)));
+    var t = (Math.random() - 0.5) * (opts.bandStrength || 0.25);
+    ctx.fillStyle = lerpColor(base, t > 0 ? "#ffffff" : "#000000", Math.abs(t));
+    ctx.globalAlpha = 0.7;
+    ctx.fillRect(0, y, w, bh);
+  }
+  ctx.globalAlpha = 1;
+  var speckles = opts.speckles || 0;
+  for (var s = 0; s < speckles; s++){
+    var t2 = (Math.random() - 0.5) * (opts.speckleStrength || 0.5);
+    ctx.fillStyle = lerpColor(base, t2 > 0 ? "#ffffff" : "#000000", Math.abs(t2));
+    ctx.globalAlpha = 0.25 + Math.random() * 0.3;
+    var r = 1 + Math.random() * (opts.speckleSize || 5);
+    ctx.beginPath();
+    ctx.arc(Math.random() * w, Math.random() * h, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  if (opts.poles){
+    var g1 = ctx.createLinearGradient(0, 0, 0, 18);
+    g1.addColorStop(0, "rgba(255,255,255,0.85)"); g1.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = g1; ctx.fillRect(0, 0, w, 18);
+    var g2 = ctx.createLinearGradient(0, h - 18, 0, h);
+    g2.addColorStop(0, "rgba(255,255,255,0)"); g2.addColorStop(1, "rgba(255,255,255,0.85)");
+    ctx.fillStyle = g2; ctx.fillRect(0, h - 18, w, 18);
+  }
+  var tex = new THREE.CanvasTexture(cv);
+  tex.wrapS = THREE.RepeatWrapping;
+  return tex;
+}
+var TEX_RECIPES = {
+  sun:     { bands:0,  speckles:260, speckleStrength:0.35, speckleSize:7 },
+  mercury: { bands:0,  speckles:220, speckleStrength:0.5,  speckleSize:4 },
+  venus:   { bands:10, bandStrength:0.12, speckles:60, speckleStrength:0.15, speckleSize:8 },
+  earth:   { bands:0,  speckles:90,  speckleStrength:0.55, speckleSize:9, poles:true },
+  mars:    { bands:5,  bandStrength:0.12, speckles:160, speckleStrength:0.4, speckleSize:4, poles:true },
+  jupiter: { bands:18, bandStrength:0.35, speckles:40, speckleStrength:0.2, speckleSize:5 },
+  saturn:  { bands:14, bandStrength:0.2,  speckles:20, speckleStrength:0.1, speckleSize:4 },
+  uranus:  { bands:6,  bandStrength:0.08 },
+  neptune: { bands:8,  bandStrength:0.18, speckles:30, speckleStrength:0.25, speckleSize:5 }
+};
+function glowTexture(inner, outer){
+  var cv = document.createElement("canvas"); cv.width = cv.height = 256;
+  var ctx = cv.getContext("2d");
+  var g = ctx.createRadialGradient(128, 128, 0, 128, 128, 128);
+  g.addColorStop(0, inner);
+  g.addColorStop(0.25, outer);
+  g.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = g; ctx.fillRect(0, 0, 256, 256);
+  return new THREE.CanvasTexture(cv);
+}
+function ringTexture(){
+  var cv = document.createElement("canvas"); cv.width = 256; cv.height = 1;
+  var ctx = cv.getContext("2d");
+  var img = ctx.createImageData(256, 1);
+  for (var x = 0; x < 256; x++){
+    var t = x / 255;
+    var a = 0.55 + 0.45 * Math.sin(t * 60) * Math.sin(t * 23 + 2);
+    if (t > 0.62 && t < 0.70) a *= 0.15;            /* Cassini-like gap */
+    a *= Math.min(1, t * 8) * Math.min(1, (1 - t) * 6);
+    var shade = 200 + Math.floor(40 * Math.sin(t * 17));
+    img.data[x * 4] = shade; img.data[x * 4 + 1] = shade - 18; img.data[x * 4 + 2] = shade - 50;
+    img.data[x * 4 + 3] = Math.floor(Math.max(0, Math.min(1, a)) * 235);
+  }
+  ctx.putImageData(img, 0, 0);
+  return new THREE.CanvasTexture(cv);
+}
+
+/* ============================ SCENE ============================== */
+var canvas = document.getElementById("scene");
+var renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+var scene = new THREE.Scene();
+var camera = new THREE.PerspectiveCamera(50, 1, 0.1, 3000);
+
+scene.add(new THREE.AmbientLight(0x32404f, 0.55));
+scene.add(new THREE.PointLight(0xfff2dd, 1.6, 0, 0));
+
+/* starfield */
+(function(){
+  var n = 2600, pos = new Float32Array(n * 3);
+  for (var i = 0; i < n; i++){
+    var r = 480 + Math.random() * 520;
+    var th = Math.random() * Math.PI * 2;
+    var ph = Math.acos(2 * Math.random() - 1);
+    pos[i * 3]     = r * Math.sin(ph) * Math.cos(th);
+    pos[i * 3 + 1] = r * Math.cos(ph);
+    pos[i * 3 + 2] = r * Math.sin(ph) * Math.sin(th);
+  }
+  var g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  scene.add(new THREE.Points(g, new THREE.PointsMaterial({
+    color: 0xcfe2ff, size: 1.4, sizeAttenuation: false, transparent: true, opacity: 0.85
+  })));
+})();
+
+/* asteroid belt */
+var belt = (function(){
+  var n = 900, pos = new Float32Array(n * 3);
+  for (var i = 0; i < n; i++){
+    var r = 37.5 + Math.random() * 5;
+    var a = Math.random() * Math.PI * 2;
+    pos[i * 3]     = Math.cos(a) * r;
+    pos[i * 3 + 1] = (Math.random() - 0.5) * 1.6;
+    pos[i * 3 + 2] = Math.sin(a) * r;
+  }
+  var g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  var p = new THREE.Points(g, new THREE.PointsMaterial({
+    color: 0x8a93a3, size: 0.9, sizeAttenuation: true, transparent: true, opacity: 0.7
+  }));
+  scene.add(p);
+  return p;
+})();
+
+/* bodies */
+var orbitLines = [], bodies = [];
+BODIES.forEach(function(d){
+  var anchor = new THREE.Group();
+  var tiltG = new THREE.Group();
+  tiltG.rotation.z = THREE.MathUtils.degToRad(d.tilt);
+  anchor.add(tiltG);
+
+  var tex = bandedTexture(d.color, TEX_RECIPES[d.key]);
+  var mesh;
+  if (d.key === "sun"){
+    mesh = new THREE.Mesh(new THREE.SphereGeometry(d.size, 48, 32),
+      new THREE.MeshBasicMaterial({ map: tex, color: 0xffd9a0 }));
+    var glow = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: glowTexture("rgba(255,214,140,0.95)", "rgba(255,150,60,0.32)"),
+      blending: THREE.AdditiveBlending, depthWrite: false
+    }));
+    glow.scale.set(d.size * 6.5, d.size * 6.5, 1);
+    anchor.add(glow);
+  } else {
+    mesh = new THREE.Mesh(new THREE.SphereGeometry(d.size, 40, 24),
+      new THREE.MeshLambertMaterial({ map: tex }));
+  }
+  tiltG.add(mesh);
+
+  if (d.key === "saturn"){
+    var inner = d.size * 1.35, outer = d.size * 2.25;
+    var rg = new THREE.RingGeometry(inner, outer, 96, 1);
+    var p = rg.attributes.position, uv = rg.attributes.uv, v = new THREE.Vector3();
+    for (var i = 0; i < p.count; i++){
+      v.fromBufferAttribute(p, i);
+      uv.setXY(i, (v.length() - inner) / (outer - inner), 0.5);
+    }
+    var ring = new THREE.Mesh(rg, new THREE.MeshBasicMaterial({
+      map: ringTexture(), side: THREE.DoubleSide, transparent: true, depthWrite: false
+    }));
+    ring.rotation.x = Math.PI / 2;
+    tiltG.add(ring);
+  }
+
+  var moonAnchor = null;
+  if (d.key === "earth"){
+    moonAnchor = new THREE.Group();
+    var moon = new THREE.Mesh(new THREE.SphereGeometry(0.27, 20, 14),
+      new THREE.MeshLambertMaterial({ map: bandedTexture("#9aa0a8", { speckles: 140, speckleStrength: 0.45, speckleSize: 3 }) }));
+    moon.position.x = 2.3;
+    moonAnchor.add(moon);
+    anchor.add(moonAnchor);
+  }
+
+  if (d.dist > 0){
+    var seg = 160, opos = new Float32Array(seg * 3);
+    for (var k = 0; k < seg; k++){
+      var ang = k / seg * Math.PI * 2;
+      opos[k * 3] = Math.cos(ang) * d.dist;
+      opos[k * 3 + 2] = Math.sin(ang) * d.dist;
+    }
+    var og = new THREE.BufferGeometry();
+    og.setAttribute("position", new THREE.BufferAttribute(opos, 3));
+    var line = new THREE.LineLoop(og, new THREE.LineBasicMaterial({
+      color: 0x8cb9ff, transparent: true, opacity: 0.13
+    }));
+    scene.add(line);
+    orbitLines.push(line);
+  }
+
+  scene.add(anchor);
+
+  var tagEl = document.createElement("div");
+  tagEl.className = "tag";
+  tagEl.textContent = d.name;
+  tagEl.addEventListener("click", function(){ select(b); });
+  document.body.appendChild(tagEl);
+
+  var b = {
+    data: d, anchor: anchor, mesh: mesh, moonAnchor: moonAnchor, tag: tagEl,
+    angle0: Math.random() * Math.PI * 2
+  };
+  bodies.push(b);
+});
+
+/* ======================= CAMERA CONTROLS ========================= */
+var target = new THREE.Vector3(0, 0, 0);
+var sph = { radius: 130, theta: 0.9, phi: 1.15 };       /* spherical around target */
+var followed = null;
+var radiusGoal = sph.radius;
+
+function applyCamera(){
+  sph.phi = Math.max(0.06, Math.min(Math.PI - 0.06, sph.phi));
+  sph.radius = Math.max(4, Math.min(420, sph.radius));
+  camera.position.set(
+    target.x + sph.radius * Math.sin(sph.phi) * Math.cos(sph.theta),
+    target.y + sph.radius * Math.cos(sph.phi),
+    target.z + sph.radius * Math.sin(sph.phi) * Math.sin(sph.theta)
+  );
+  camera.lookAt(target);
+}
+
+var pointers = new Map(), pinchDist = 0, downPos = null, moved = false;
+canvas.addEventListener("pointerdown", function(e){
+  canvas.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  downPos = { x: e.clientX, y: e.clientY }; moved = false;
+  canvas.classList.add("dragging");
+  if (pointers.size === 2){
+    var pts = Array.from(pointers.values());
+    pinchDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+  }
+});
+canvas.addEventListener("pointermove", function(e){
+  if (!pointers.has(e.pointerId)) return;
+  var prev = pointers.get(e.pointerId);
+  var dx = e.clientX - prev.x, dy = e.clientY - prev.y;
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (downPos && Math.hypot(e.clientX - downPos.x, e.clientY - downPos.y) > 5) moved = true;
+  if (pointers.size === 1){
+    sph.theta += dx * 0.005;
+    sph.phi   -= dy * 0.005;
+  } else if (pointers.size === 2){
+    var pts = Array.from(pointers.values());
+    var nd = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+    if (pinchDist > 0){ radiusGoal *= pinchDist / nd; radiusGoal = Math.max(4, Math.min(420, radiusGoal)); }
+    pinchDist = nd;
+  }
+});
+function endPointer(e){
+  pointers.delete(e.pointerId);
+  if (pointers.size === 0) canvas.classList.remove("dragging");
+  if (!moved && e.type === "pointerup") pick(e.clientX, e.clientY);
+  downPos = null;
+}
+canvas.addEventListener("pointerup", endPointer);
+canvas.addEventListener("pointercancel", endPointer);
+canvas.addEventListener("wheel", function(e){
+  e.preventDefault();
+  radiusGoal *= Math.exp(e.deltaY * 0.0012);
+  radiusGoal = Math.max(4, Math.min(420, radiusGoal));
+}, { passive: false });
+
+var raycaster = new THREE.Raycaster();
+function pick(cx, cy){
+  var ndc = new THREE.Vector2((cx / window.innerWidth) * 2 - 1, -(cy / window.innerHeight) * 2 + 1);
+  raycaster.setFromCamera(ndc, camera);
+  raycaster.params.Points = { threshold: 0 };
+  var meshes = bodies.map(function(b){ return b.mesh; });
+  var hits = raycaster.intersectObjects(meshes, false);
+  if (hits.length){
+    var hitMesh = hits[0].object;
+    var b = bodies.find(function(bb){ return bb.mesh === hitMesh; });
+    if (b) select(b);
+  }
+  hideHint();
+}
+
+/* ========================= SELECTION / UI ========================= */
+var dossier = document.getElementById("dossier");
+function select(b){
+  followed = b;
+  radiusGoal = Math.max(5, b.data.size * 7);
+  document.getElementById("d-type").textContent = b.data.type;
+  document.getElementById("d-name").textContent = b.data.name;
+  document.getElementById("d-diam").textContent = b.data.diam;
+  document.getElementById("d-day").textContent  = b.data.day;
+  document.getElementById("d-year").textContent = b.data.year;
+  document.getElementById("d-dist").textContent = b.data.sdist;
+  document.getElementById("d-fact").textContent = b.data.fact;
+  dossier.classList.add("open");
+  bodies.forEach(function(bb){ bb.tag.classList.toggle("sel", bb === b); });
+  navBtns.forEach(function(nb){ nb.btn.classList.toggle("on", nb.body === b); });
+  hideHint();
+}
+function release(toOrigin){
+  followed = null;
+  dossier.classList.remove("open");
+  bodies.forEach(function(bb){ bb.tag.classList.remove("sel"); });
+  navBtns.forEach(function(nb){ nb.btn.classList.remove("on"); });
+  if (toOrigin){ radiusGoal = 130; }
+}
+document.getElementById("btn-release").addEventListener("click", function(){ release(false); });
+document.getElementById("btn-reset").addEventListener("click", function(){
+  release(true);
+  sph.theta = 0.9; sph.phi = 1.15;
+});
+
+/* planet nav strip */
+var navBtns = [];
+var navEl = document.getElementById("hud-nav");
+bodies.forEach(function(b){
+  var btn = document.createElement("button");
+  btn.textContent = b.data.name;
+  btn.addEventListener("click", function(){ select(b); });
+  navEl.appendChild(btn);
+  navBtns.push({ btn: btn, body: b });
+});
+
+/* toggles */
+var showOrbits = true, showLabels = true;
+document.getElementById("btn-orbits").addEventListener("click", function(){
+  showOrbits = !showOrbits;
+  this.classList.toggle("on", showOrbits);
+  this.setAttribute("aria-pressed", showOrbits);
+  orbitLines.forEach(function(l){ l.visible = showOrbits; });
+});
+document.getElementById("btn-labels").addEventListener("click", function(){
+  showLabels = !showLabels;
+  this.classList.toggle("on", showLabels);
+  this.setAttribute("aria-pressed", showLabels);
+});
+
+/* time controls */
+var BASE_DAYS_PER_SEC = 365.25 / 60;          /* 1× → Earth year in 60 s */
+var paused = false, speedMult = 1, simDays = 0;
+var reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+if (reducedMotion) paused = true;
+
+var pauseBtn = document.getElementById("btn-pause");
+function setPaused(p){
+  paused = p;
+  pauseBtn.textContent = paused ? "Play" : "Pause";
+  pauseBtn.classList.toggle("on", paused);
+}
+setPaused(paused);
+pauseBtn.addEventListener("click", function(){ setPaused(!paused); });
+
+var speedEl = document.getElementById("speed");
+var speedOut = document.getElementById("speed-out");
+function updateSpeed(){
+  var v = speedEl.value / 1000;
+  speedMult = 0.1 * Math.pow(600, v);          /* 0.1× … 60× log scale */
+  var dps = BASE_DAYS_PER_SEC * speedMult;
+  speedOut.textContent = dps >= 365
+    ? "≈ " + (dps / 365.25).toFixed(1) + " yrs / s"
+    : "≈ " + dps.toFixed(1) + " days / s";
+}
+speedEl.addEventListener("input", updateSpeed);
+updateSpeed();
+
+document.addEventListener("keydown", function(e){
+  if (e.code === "Space" && e.target.tagName !== "BUTTON" && e.target.tagName !== "INPUT"){
+    e.preventDefault(); setPaused(!paused);
+  }
+  if (e.code === "Escape") release(false);
+});
+
+var hintEl = document.getElementById("hint");
+var hintHidden = false;
+function hideHint(){
+  if (hintHidden) return;
+  hintHidden = true;
+  hintEl.classList.add("gone");
+}
+setTimeout(hideHint, 12000);
+
+/* clock */
+var clockEl = document.getElementById("clock");
+function pad(n, w){ n = String(n); while (n.length < w) n = "0" + n; return n; }
+
+/* ============================ RESIZE ============================= */
+function resize(){
+  var w = window.innerWidth, h = window.innerHeight;
+  renderer.setSize(w, h);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+window.addEventListener("resize", resize);
+resize();
+
+/* ============================== LOOP ============================= */
+var clock = new THREE.Clock();
+var tmpV = new THREE.Vector3();
+
+function animate(){
+  requestAnimationFrame(animate);
+  var dt = Math.min(clock.getDelta(), 0.1);
+
+  if (!paused) simDays += dt * BASE_DAYS_PER_SEC * speedMult;
+
+  bodies.forEach(function(b){
+    var d = b.data;
+    if (d.dist > 0){
+      var a = b.angle0 + (Math.PI * 2) * simDays / d.period;
+      b.anchor.position.set(Math.cos(a) * d.dist, 0, Math.sin(a) * d.dist);
+    }
+    if (d.spin) b.mesh.rotation.y = (Math.PI * 2) * simDays / d.spin;
+    if (b.moonAnchor) b.moonAnchor.rotation.y = (Math.PI * 2) * simDays / 27.3;
+  });
+  belt.rotation.y = (Math.PI * 2) * simDays / 1650;
+
+  /* camera */
+  sph.radius += (radiusGoal - sph.radius) * Math.min(1, dt * 6);
+  if (followed){
+    followed.anchor.getWorldPosition(tmpV);
+    target.lerp(tmpV, Math.min(1, dt * 8));
+  } else {
+    target.lerp(new THREE.Vector3(0, 0, 0), Math.min(1, dt * 4));
+  }
+  applyCamera();
+
+  /* clock readout */
+  var yrs = Math.floor(simDays / 365.25);
+  var days = Math.floor(simDays - yrs * 365.25);
+  clockEl.textContent = "T+ " + yrs + "Y " + pad(days, 3) + "D";
+
+  /* labels */
+  bodies.forEach(function(b){
+    if (!showLabels){ b.tag.style.display = "none"; return; }
+    b.anchor.getWorldPosition(tmpV);
+    tmpV.y += b.data.size * 1.25;
+    tmpV.project(camera);
+    var behind = tmpV.z > 1;
+    var x = (tmpV.x * 0.5 + 0.5) * window.innerWidth;
+    var y = (-tmpV.y * 0.5 + 0.5) * window.innerHeight;
+    var off = behind || x < -60 || x > window.innerWidth + 60 || y < -40 || y > window.innerHeight + 40;
+    b.tag.style.display = off ? "none" : "block";
+    if (!off){ b.tag.style.left = x + "px"; b.tag.style.top = y + "px"; }
+  });
+
+  renderer.render(scene, camera);
+}
+animate();
+})();
+</script>
+</body>
+</html>
