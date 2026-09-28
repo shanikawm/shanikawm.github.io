@@ -223,6 +223,8 @@
   .hero-title .accent{
     font-family:var(--serif); font-style:italic; font-weight:400;
     font-size:1.13em; letter-spacing:-.01em; line-height:1; padding-right:.08em;
+    /* background-clip:text only paints inside the box; give the italic descenders (y, g) room */
+    padding-bottom:.22em; margin-bottom:-.22em;
   }
   .hero-title .accent.grad{
     background:linear-gradient(100deg, var(--teal) 0%, #7fd6ff 40%, var(--violet) 75%, #b69cff 100%);
